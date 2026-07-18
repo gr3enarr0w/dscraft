@@ -184,25 +184,57 @@ def test_run_callable_rejects_unpicklable_lambda():
         executor.run_callable(lambda: 1)
 
 
+def _install_no_subprocess_no_tempdir_tripwires(monkeypatch, *, reason: str):
+    """Monkeypatch both ``subprocess.run`` and ``tempfile.TemporaryDirectory``
+    (as seen from ``lazycore.sandbox.seatbelt``) to raise ``AssertionError``
+    if called.
+
+    Used by the rejection regression tests below to prove that argument
+    validation happens before *any* side effect of ``run_callable()`` --
+    not just before the sandboxed subprocess is spawned (the original
+    guard), but also before the temporary directory/payload/runner files
+    that ``run_callable()`` would otherwise create on disk (CodeRabbit
+    finding: the subprocess-only tripwire proved rejection happens before
+    execution, but not before filesystem side effects -- a rejected call
+    should have zero footprint on disk, not just zero execution).
+    """
+
+    def _fail_if_subprocess_run_called(*args, **kwargs):
+        raise AssertionError(
+            f"subprocess.run() must not be invoked once argument validation "
+            f"has rejected {reason}"
+        )
+
+    def _fail_if_tempdir_created(*args, **kwargs):
+        raise AssertionError(
+            f"tempfile.TemporaryDirectory() must not be invoked once "
+            f"argument validation has rejected {reason} -- rejection must "
+            "happen before any temp file/directory is created, not just "
+            "before the subprocess is spawned"
+        )
+
+    monkeypatch.setattr(
+        "lazycore.sandbox.seatbelt.subprocess.run", _fail_if_subprocess_run_called
+    )
+    monkeypatch.setattr(
+        "lazycore.sandbox.seatbelt.tempfile.TemporaryDirectory",
+        _fail_if_tempdir_created,
+    )
+
+
 def test_run_callable_rejects_tuple_bound_argument(monkeypatch):
     """A functools.partial whose bound args include a tuple raises a clear ValueError before anything is written to disk or executed -- json.dumps() would otherwise silently coerce the tuple into a JSON array indistinguishable from a list, so the sandboxed child would reconstruct a list where a tuple was actually passed (Finding 3 fix)."""
     import functools
 
     import _callable_fixtures  # type: ignore[import-not-found]
 
-    # If _decompose_callable's validation were bypassed, run_command()
-    # would go on to invoke subprocess.run() (via sandbox-exec) -- fail
-    # loudly if that ever happens, so this test actually proves nothing
-    # was written to disk or executed, not just that *a* ValueError was
-    # raised somewhere.
-    def _fail_if_called(*args, **kwargs):
-        raise AssertionError(
-            "subprocess.run() must not be invoked once argument validation "
-            "has rejected a tuple bound argument"
-        )
-
-    monkeypatch.setattr(
-        "lazycore.sandbox.seatbelt.subprocess.run", _fail_if_called
+    # If _decompose_callable's validation were bypassed, run_callable()
+    # would go on to create a temp directory and/or run_command() would
+    # invoke subprocess.run() (via sandbox-exec) -- fail loudly if either
+    # ever happens, so this test actually proves nothing was written to
+    # disk or executed, not just that *a* ValueError was raised somewhere.
+    _install_no_subprocess_no_tempdir_tripwires(
+        monkeypatch, reason="a tuple bound argument"
     )
 
     executor = SeatbeltSandboxExecutor()
@@ -218,14 +250,8 @@ def test_run_callable_rejects_dict_with_non_string_key(monkeypatch):
 
     import _callable_fixtures  # type: ignore[import-not-found]
 
-    def _fail_if_called(*args, **kwargs):
-        raise AssertionError(
-            "subprocess.run() must not be invoked once argument validation "
-            "has rejected a dict with a non-string key"
-        )
-
-    monkeypatch.setattr(
-        "lazycore.sandbox.seatbelt.subprocess.run", _fail_if_called
+    _install_no_subprocess_no_tempdir_tripwires(
+        monkeypatch, reason="a dict with a non-string key"
     )
 
     executor = SeatbeltSandboxExecutor()
@@ -241,14 +267,8 @@ def test_run_callable_rejects_nan_and_infinite_float_arguments(monkeypatch):
 
     import _callable_fixtures  # type: ignore[import-not-found]
 
-    def _fail_if_called(*args, **kwargs):
-        raise AssertionError(
-            "subprocess.run() must not be invoked once argument validation "
-            "has rejected a NaN/Infinity float"
-        )
-
-    monkeypatch.setattr(
-        "lazycore.sandbox.seatbelt.subprocess.run", _fail_if_called
+    _install_no_subprocess_no_tempdir_tripwires(
+        monkeypatch, reason="a NaN/Infinity float"
     )
 
     executor = SeatbeltSandboxExecutor()
@@ -257,6 +277,97 @@ def test_run_callable_rejects_nan_and_infinite_float_arguments(monkeypatch):
         partial_call = functools.partial(_callable_fixtures.add_numbers, bad_value)
         with pytest.raises(ValueError):
             executor.run_callable(partial_call)
+
+
+def test_run_callable_rejects_malicious_repr_value_without_calling_it(monkeypatch):
+    """A bound argument of a type _validate_json_safe_value must reject (nested inside a list, so the recursive validator actually visits it) is still correctly rejected with ValueError even when its __repr__/__str__ is malicious -- and, critically, that malicious __repr__/__str__ is never actually invoked while building the rejection error message.
+
+    This is the regression test for the CodeRabbit finding that the
+    rejection path itself must not call repr()/str() on the untrusted
+    value: doing so would invoke value.__repr__()/__str__() in this
+    trusted host process, which a malicious object could override to run
+    arbitrary code the moment validation tries to report that the value is
+    invalid.
+    """
+    import functools
+
+    import _callable_fixtures  # type: ignore[import-not-found]
+
+    class _ExplodingRepr:
+        """An object of a non-JSON-native type whose __repr__/__str__ raise
+        if ever invoked -- if _validate_json_safe_value's rejection path
+        called repr()/str() on the untrusted value, this would blow up with
+        AssertionError instead of a clean ValueError."""
+
+        def __repr__(self):
+            raise AssertionError(
+                "__repr__ must never be called on an untrusted value while "
+                "building a validation rejection message"
+            )
+
+        def __str__(self):
+            raise AssertionError(
+                "__str__ must never be called on an untrusted value while "
+                "building a validation rejection message"
+            )
+
+    _install_no_subprocess_no_tempdir_tripwires(
+        monkeypatch, reason="a value with a malicious __repr__/__str__"
+    )
+
+    executor = SeatbeltSandboxExecutor()
+    # Nested inside a list so the recursive validator actually descends into
+    # it (top-level args/kwargs values go through the same recursive
+    # function, but nesting also proves the recursion path is safe, not
+    # just the top-level dispatch).
+    partial_call = functools.partial(
+        _callable_fixtures.add_numbers, [1, _ExplodingRepr(), 3]
+    )
+
+    # If __repr__/__str__ were ever called on the bad value, it would raise
+    # AssertionError (from the class above) instead of this clean
+    # ValueError -- so a passing test proves both (a) it's still rejected,
+    # and (b) the malicious dunder methods were never invoked.
+    with pytest.raises(ValueError, match="not a JSON-native type"):
+        executor.run_callable(partial_call)
+
+
+def test_validate_json_safe_value_rejects_malicious_repr_directly():
+    """Direct unit-level regression test for _validate_json_safe_value: a bad value with a malicious __repr__/__str__ is rejected with ValueError, and the malicious dunder methods are never invoked, without going through the full run_callable()/sandbox machinery at all."""
+    from lazycore.sandbox.seatbelt import _validate_json_safe_value
+
+    class _ExplodingRepr:
+        def __repr__(self):
+            raise AssertionError("__repr__ must never be called on an untrusted value")
+
+        def __str__(self):
+            raise AssertionError("__str__ must never be called on an untrusted value")
+
+    with pytest.raises(ValueError, match="not a JSON-native type"):
+        _validate_json_safe_value(_ExplodingRepr(), path="args[0]")
+
+    # Also exercise the non-string-dict-key rejection path with a malicious
+    # key whose __repr__/__str__ raise.
+    class _ExplodingKey:
+        def __repr__(self):
+            raise AssertionError("__repr__ must never be called on an untrusted key")
+
+        def __str__(self):
+            raise AssertionError("__str__ must never be called on an untrusted key")
+
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            return self is other
+
+    with pytest.raises(ValueError, match="non-string key"):
+        _validate_json_safe_value({_ExplodingKey(): "value"}, path="args[0]")
+
+    # And the tuple rejection path with a tuple containing a malicious
+    # element (the tuple itself is never repr()'d either).
+    with pytest.raises(ValueError, match="tuple"):
+        _validate_json_safe_value((_ExplodingRepr(),), path="args[0]")
 
 
 def test_run_callable_still_accepts_json_native_args_end_to_end():

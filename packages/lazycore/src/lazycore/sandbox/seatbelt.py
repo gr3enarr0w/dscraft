@@ -398,6 +398,25 @@ def _validate_json_safe_value(value: object, *, path: str) -> None:
             the overall ``args``/``kwargs`` structure, used to build a
             precise error message (e.g. ``"args[0]"``, ``"kwargs['x'][2]"``).
 
+    **Rejection messages never call ``repr()``/``str()`` on the untrusted,
+    already-invalid ``value`` (or a non-``str`` dict key).** This is the
+    same vulnerability class already fixed twice elsewhere in this module
+    (attacker-controlled dunder methods -- there, ``__eq__``/``__ne__``/
+    ``__contains__``; here, ``__repr__``/``__str__``): calling ``repr()``
+    on an arbitrary object invokes ``value.__repr__()``, which a malicious
+    class could override to run arbitrary code the moment this function
+    tries to *report* that the value is invalid -- i.e. even the "we're
+    rejecting this" path is not safe unless it avoids touching the object
+    itself. Error messages below therefore only ever use
+    ``type(value).__name__`` (an attribute access on the *type* object, not
+    a method call on the untrusted instance -- always safe) and the
+    caller-constructed, already-known-safe ``path`` string, never a
+    ``repr()``/``str()``/f-string ``!r``/``!s`` of ``value`` itself. The one
+    exception is a dict key already confirmed to be exactly ``str`` (not a
+    subclass) by the ``type(key) is not str`` check immediately above each
+    such use -- plain ``str.__repr__`` cannot be overridden without
+    subclassing, so that specific ``repr()`` call is safe.
+
     Raises:
         ValueError: If ``value`` (or anything nested inside it) is a
             ``tuple``, a ``dict`` with a non-``str`` key, or any other
@@ -415,33 +434,48 @@ def _validate_json_safe_value(value: object, *, path: str) -> None:
         for key, item in value.items():
             if type(key) is not str:
                 raise ValueError(
-                    f"{path} has a non-string key {key!r} (type "
-                    f"{type(key).__name__!r}). run_callable() rejects this "
+                    f"{path} has a non-string key of type "
+                    f"{type(key).__name__!r}. run_callable() rejects this "
                     "instead of letting json.dumps() silently stringify it "
                     '(e.g. turning {1: ...} into {"1": ...} on the wire) -- '
                     "that would change what key the sandboxed child "
                     "actually sees relative to what was passed. Use only "
-                    "string keys."
+                    "string keys. (The key's value is deliberately omitted "
+                    "from this message -- repr()/str() on an untrusted, "
+                    "already-invalid object could invoke an "
+                    "attacker-controlled __repr__/__str__ in this trusted "
+                    "host process.)"
                 )
+            # Safe to repr() here: the type(key) is not str check above
+            # already raised for anything else, so key is guaranteed to be
+            # a plain str (not a subclass) at this point, and plain str's
+            # __repr__ cannot be attacker-overridden.
             _validate_json_safe_value(item, path=f"{path}[{key!r}]")
         return
 
     if isinstance(value, tuple):
         raise ValueError(
-            f"{path} is a tuple ({value!r}). run_callable() rejects tuple "
+            f"{path} is a tuple. run_callable() rejects tuple "
             "arguments instead of letting json.dumps() silently coerce "
             "them into a JSON array indistinguishable from a list -- the "
             "sandboxed child's json.load() always reconstructs a list, so "
             "it would receive a different runtime type than the one "
             "actually passed. Convert it to a list explicitly if a list is "
-            "what you intend the child to receive."
+            "what you intend the child to receive. (The tuple's contents "
+            "are deliberately omitted from this message -- repr() on an "
+            "untrusted value could invoke an attacker-controlled __repr__ "
+            "in this trusted host process.)"
         )
 
     raise ValueError(
-        f"{path} is of type {type(value).__name__!r} ({value!r}), which is "
+        f"{path} is of type {type(value).__name__!r}, which is "
         "not a JSON-native type. run_callable() only supports str, int, "
         "float, bool, None, list, and dict (with string keys) for "
-        "functools.partial bound arguments."
+        "functools.partial bound arguments. (The value itself is "
+        "deliberately omitted from this message -- repr()/str() on an "
+        "untrusted, already-invalid object could invoke an "
+        "attacker-controlled __repr__/__str__ in this trusted host "
+        "process.)"
     )
 
 
@@ -476,9 +510,12 @@ def _validate_run_callable_arguments(
     for key, value in kwargs.items():
         if type(key) is not str:
             raise ValueError(
-                f"kwargs key {key!r} (type {type(key).__name__!r}) is not "
-                "a string. run_callable() keyword arguments must have "
-                "string keys."
+                f"a kwargs key of type {type(key).__name__!r} is not a "
+                "string. run_callable() keyword arguments must have string "
+                "keys. (The key's value is deliberately omitted from this "
+                "message -- repr()/str() on an untrusted, already-invalid "
+                "object could invoke an attacker-controlled "
+                "__repr__/__str__ in this trusted host process.)"
             )
         _validate_json_safe_value(value, path=f"kwargs[{key!r}]")
 
