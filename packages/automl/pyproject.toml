@@ -32,13 +32,13 @@ classifiers = [
 # be installed first: `pip install -e packages/lazycore` before installing
 # this package (see README). Declaring it here means a resolver run
 # without lazycore already installed fails fast with a clear "could not
-# find lazycore" error instead of succeeding and then failing at import
-# time inside `lazycore.data`.
+# find benchcraft-core" error instead of succeeding and then failing at
+# import time inside `lazycore.data`.
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
     "scikit-learn>=1.3",
-    "lazycore",
+    "benchcraft-core",
 ]
 
 [project.optional-dependencies]
