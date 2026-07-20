@@ -38,11 +38,11 @@ class _StubExecutor(BaseSandboxExecutor):
 
 
 def test_base_sandboxed_adapter_is_instantiable_without_abstract_methods():
-    """``BaseSandboxedAdapter`` is an ``abc.ABC`` but defines no abstract
-    methods of its own, so ``abc.ABC`` does not block direct instantiation.
-    It exists purely as a shared base for concrete adapter hierarchies and
-    is never used as an adapter in its own right in practice, but nothing
-    prevents direct instantiation."""
+    """``BaseSandboxedAdapter`` is a plain class (not an ``abc.ABC``) and
+    defines no abstract methods of its own, so nothing blocks direct
+    instantiation. It exists purely as a shared base for concrete adapter
+    hierarchies and is never used as an adapter in its own right in
+    practice, but nothing prevents direct instantiation."""
     adapter = BaseSandboxedAdapter()
     assert isinstance(adapter, BaseSandboxedAdapter)
 

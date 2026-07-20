@@ -155,7 +155,7 @@ class TaskResult:
     detail: str = ""
 
 
-class AgentAdapter(BaseSandboxedAdapter):
+class AgentAdapter(BaseSandboxedAdapter, abc.ABC):
     """Minimal bring-your-own-agent interface.
 
     ``run_task`` is the one canonical entrypoint (per CLAUDE.md's "one
@@ -167,7 +167,12 @@ class AgentAdapter(BaseSandboxedAdapter):
     Subclasses `dscraft.core.adapter.BaseSandboxedAdapter`, the one shared
     adapter base LazyAgent and LazyRed both build on (§2.3) -- only the
     task/trajectory/result data shapes and the ``run_task`` abstract method
-    below are LazyAgent-specific.
+    below are LazyAgent-specific. `BaseSandboxedAdapter` itself is no longer
+    an `abc.ABC` (it defines no abstract methods of its own), so this class
+    adds `abc.ABC` directly alongside it to keep ``run_task``'s
+    ``@abc.abstractmethod`` decorator actually enforced (i.e. this class,
+    like `BaseSandboxedAdapter`'s previous behavior, still cannot be
+    instantiated directly).
     """
 
     @abc.abstractmethod

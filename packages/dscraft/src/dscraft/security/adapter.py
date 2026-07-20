@@ -164,7 +164,7 @@ class Finding:
     inconclusive: bool = False
 
 
-class BaseSecurityAdapter(BaseSandboxedAdapter):
+class BaseSecurityAdapter(BaseSandboxedAdapter, abc.ABC):
     """Minimal ``BaseSecurityAdapter`` interface (architecture doc Part 3).
 
     Three required steps, matching garak's Probe -> Generator -> Detector
@@ -185,7 +185,12 @@ class BaseSecurityAdapter(BaseSandboxedAdapter):
     Subclasses `dscraft.core.adapter.BaseSandboxedAdapter`, the one shared
     adapter base LazyRed and LazyAgent both build on (§2.3) -- only the
     attempt/finding data shapes and the three abstract methods plus ``run``
-    below are LazyRed-specific.
+    below are LazyRed-specific. `BaseSandboxedAdapter` itself is no longer
+    an `abc.ABC` (it defines no abstract methods of its own), so this class
+    adds `abc.ABC` directly alongside it to keep ``generate_attempt``/
+    ``run_target``/``detect``'s ``@abc.abstractmethod`` decorators actually
+    enforced (i.e. this class, like `BaseSandboxedAdapter`'s previous
+    behavior, still cannot be instantiated directly).
     """
 
     @abc.abstractmethod

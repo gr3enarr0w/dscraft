@@ -32,14 +32,12 @@ requires this module to preserve.
 
 from __future__ import annotations
 
-import abc
-
 from dscraft.core.sandbox import BaseSandboxExecutor
 
 __all__ = ["BaseSandboxedAdapter"]
 
 
-class BaseSandboxedAdapter(abc.ABC):
+class BaseSandboxedAdapter:
     """Common ancestor for adapters that execute untrusted work through a
     caller-supplied `dscraft.core.sandbox.BaseSandboxExecutor`.
 
@@ -59,11 +57,15 @@ class BaseSandboxedAdapter(abc.ABC):
     duplicated as two parallel, independently-written `abc.ABC`
     definitions, is:
 
-    1. Being an `abc.ABC` under the same lineage -- `AgentAdapter` and
+    1. Being under the same lineage -- `AgentAdapter` and
        `BaseSecurityAdapter` are now both `BaseSandboxedAdapter` subclasses,
        matching the locked "one ... adapter base class" architecture
        decision (§2.3) instead of two independent hierarchies that happen
-       to look similar.
+       to look similar. `BaseSandboxedAdapter` itself is a plain class, not
+       an `abc.ABC` -- it defines no abstract methods of its own, so
+       `abc.ABC` here would not enforce anything (Ruff B024). Each
+       subclass that does have its own abstract methods (both currently
+       do) adds `abc.ABC` itself alongside this base.
     2. The contract that any executable action a concrete subclass performs
        must be routed through a `BaseSandboxExecutor` instance supplied by
        the *caller* -- never a sandbox mechanism the adapter constructs
