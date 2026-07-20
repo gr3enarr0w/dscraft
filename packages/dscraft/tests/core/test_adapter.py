@@ -37,14 +37,12 @@ class _StubExecutor(BaseSandboxExecutor):
         return SandboxResult(exit_code=0, stdout=repr(func()), stderr="")
 
 
-def test_base_sandboxed_adapter_cannot_be_instantiated_directly():
-    """``BaseSandboxedAdapter`` is an ``abc.ABC`` -- even though it defines
-    no abstract methods of its own, it exists purely as a shared base for
-    concrete adapter hierarchies, never as a adapter in its own right."""
-    # BaseSandboxedAdapter defines no abstract methods, so ABCMeta does not
-    # block direct instantiation on that basis -- assert instead that it
-    # carries no behavior of its own (no run/execute entrypoint), which is
-    # what actually keeps it from being used standalone.
+def test_base_sandboxed_adapter_is_instantiable_without_abstract_methods():
+    """``BaseSandboxedAdapter`` is an ``abc.ABC`` but defines no abstract
+    methods of its own, so ``abc.ABC`` does not block direct instantiation.
+    It exists purely as a shared base for concrete adapter hierarchies and
+    is never used as an adapter in its own right in practice, but nothing
+    prevents direct instantiation."""
     adapter = BaseSandboxedAdapter()
     assert isinstance(adapter, BaseSandboxedAdapter)
 
