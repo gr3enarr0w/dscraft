@@ -131,11 +131,11 @@ from dscraft.eda.sketches import (
 )
 
 __all__ = [
-    "LazyEDA",
     "EDAProfile",
+    "LazyEDA",
+    "PlotnineExtraNotInstalledError",
     "association_heatmap",
     "column_distribution",
-    "PlotnineExtraNotInstalledError",
 ]
 
 #: Default quantiles requested per numeric column: min, p25, median, p75,

@@ -54,13 +54,47 @@ def _mixed_dataframe(n: int = 200) -> pl.DataFrame:
 
 
 def test_association_heatmap_returns_ggplot() -> None:
-    """`association_heatmap` returns a `plotnine.ggplot` for a real
-    `AssociationMatrixResult` computed by `dscraft.eda.associations`
-    (reused directly, not recomputed by `dscraft.eda.plots`)."""
+    """`association_heatmap` returns a `plotnine.ggplot` built from
+    `result`'s own data (reused directly, not recomputed by
+    `dscraft.eda.plots`), and actually inspects the rendered plot's
+    structure rather than just its type:
+
+    - a `geom_tile` layer is present (the heatmap-specific geom
+      `association_heatmap` documents using, not e.g. `geom_col`);
+    - `plot.data` (the long-format frame `association_heatmap` builds
+      from `result.matrix`) contains one row per (row, column) pair, with
+      the same column/row labels and association values as `result`
+      itself -- proving the reshape didn't drop or garble any cell;
+    - the default title ("Association matrix") propagates into the
+      plot's `labs`.
+    """
     plotnine = _import_plotnine()
     result = mixed_type_association_matrix(_mixed_dataframe())
     plot = association_heatmap(result)
     assert isinstance(plot, plotnine.ggplot)
+
+    # A `geom_tile` layer is present -- the heatmap-specific geom this
+    # function documents itself as using.
+    assert any(isinstance(layer.geom, plotnine.geoms.geom_tile) for layer in plot.layers)
+
+    # The long-format `plot.data` frame has one row per (row, column) pair
+    # and reproduces `result.matrix`'s actual values -- not just some
+    # frame of the right shape.
+    columns = list(result.columns)
+    assert len(plot.data) == len(columns) * len(columns)
+    assert set(plot.data["row"].astype(str)) == set(columns)
+    assert set(plot.data["column"].astype(str)) == set(columns)
+    for _, record in plot.data.iterrows():
+        i = columns.index(str(record["row"]))
+        j = columns.index(str(record["column"]))
+        expected = float(result.matrix[i, j])
+        if np.isnan(expected):
+            assert np.isnan(record["value"])
+        else:
+            assert record["value"] == pytest.approx(expected)
+
+    # The default title propagates through `plotnine.labs(title=...)`.
+    assert plot.labels.title == "Association matrix"
 
 
 def test_association_heatmap_from_lazyeda_profile() -> None:
