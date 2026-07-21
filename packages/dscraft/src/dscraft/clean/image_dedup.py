@@ -7,14 +7,18 @@ this module implements the recommendation of. In short: `dscraft.clean` has
 a hard, deliberate PyTorch-free constraint (ONNX Runtime only, to stay under
 this package's ~100MB footprint target -- see ``embeddings.py``'s module
 docstring), while CLIP-based image deduplication is conventionally
-PyTorch-based (``open-clip-torch``). That evaluation found a Tier-1
-(MIT-licensed-codebase), ONNX-exported, <100MB-class CLIP vision encoder
-does exist -- ``Xenova/clip-vit-base-patch32``'s ``onnx/vision_model_int8.onnx``
-(88.6MB, int8-quantized, re-exported from ``openai/clip-vit-base-patch32``,
-whose own GitHub repository is MIT-licensed) -- so this capability belongs
-in `dscraft.clean`, not `dscraft.vision`, exactly mirroring
-``embeddings.py``'s existing "ONNX Runtime, never PyTorch" pattern rather
-than requiring the PyTorch-based `dscraft.vision` stack.
+PyTorch-based (``open-clip-torch``). That evaluation found a candidate
+ONNX-exported, <100MB-class CLIP vision encoder does exist --
+``Xenova/clip-vit-base-patch32``'s ``onnx/vision_model_int8.onnx`` (88.6MB,
+int8-quantized, re-exported from ``openai/clip-vit-base-patch32``) -- so
+this capability belongs in `dscraft.clean`, not `dscraft.vision`, exactly
+mirroring ``embeddings.py``'s existing "ONNX Runtime, never PyTorch"
+pattern rather than requiring the PyTorch-based `dscraft.vision` stack.
+**Licensing is Tier 2 (opt-in-gated), not Tier 1**: the checkpoint's own
+Hugging Face model card carries no explicit SPDX license tag, so this is
+pending verification, not a settled MIT conclusion -- see
+:data:`RECOMMENDED_IMAGE_MODEL_NAME`'s allowlist entry below and the
+evaluation doc for the full caveat.
 
 Same hard constraint as ``embeddings.py``: embeddings are produced by
 loading a ``.onnx`` model file directly via the ``onnxruntime`` Python
@@ -42,12 +46,12 @@ exactly:
    same scope boundary as ``build_synthetic_embedding_model`` in
    ``embeddings.py``.
 2. :func:`download_recommended_clip_vision_model` -- documents (and, given
-   network access, performs) the production wiring: fetching the Tier-1
-   ``vision_model_int8.onnx`` checkpoint referenced in
-   :data:`RECOMMENDED_IMAGE_MODEL_NAME`'s allowlist entry and caching it
-   locally. Optional and lazy, exactly like
-   ``embeddings.download_recommended_model`` -- never called by tests, the
-   example, or any import-time code in this package.
+   network access and ``accept_restricted_licenses=True``, performs) the
+   production wiring: fetching the Tier-2 ``vision_model_int8.onnx``
+   checkpoint referenced in :data:`RECOMMENDED_IMAGE_MODEL_NAME`'s allowlist
+   entry, verifying its SHA-256 digest, and caching it locally. Optional and
+   lazy, exactly like ``embeddings.download_recommended_model`` -- never
+   called by tests, the example, or any import-time code in this package.
 
 :func:`detect_near_duplicate_images` is the one canonical entrypoint tying
 this module's embedding path to ``dedup.py``'s existing, modality-agnostic
@@ -59,6 +63,7 @@ the image-specific embedding step.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from dataclasses import dataclass
@@ -77,6 +82,7 @@ from .embeddings import MODEL_ALLOWLIST
 
 __all__ = [
     "RECOMMENDED_IMAGE_MODEL_NAME",
+    "ModelIntegrityError",
     "ImageEmbeddingModel",
     "resize_and_normalize",
     "build_synthetic_image_embedding_onnx",
@@ -84,6 +90,13 @@ __all__ = [
     "download_recommended_clip_vision_model",
     "detect_near_duplicate_images",
 ]
+
+
+class ModelIntegrityError(RuntimeError):
+    """Raised when a downloaded or cached model file's SHA-256 digest does
+    not match the pinned expected digest (see
+    :data:`_RECOMMENDED_IMAGE_MODEL_ONNX_SHA256`). Never promote/reuse
+    content that fails this check."""
 
 # ---------------------------------------------------------------------------
 # Model licensing allowlist (architecture doc §2.10) -- registered into the
@@ -98,40 +111,55 @@ RECOMMENDED_IMAGE_MODEL_NAME = "Xenova/clip-vit-base-patch32 (vision_model_int8.
 # embeddings.py's _RECOMMENDED_MODEL_REVISION for why a pinned commit SHA
 # (not "main") is required: "main" is a mutable branch ref that could be
 # force-pushed to a different export at any time, silently invalidating the
-# Tier-1/license review this module's allowlist entry documents.
-_RECOMMENDED_IMAGE_MODEL_REVISION = "8557a67d0f43938c8628ee8db7b0f4fca8ecc603"
+# Tier-2/license review this module's allowlist entry documents. (This
+# specific SHA was re-verified as part of the 2026-07 CodeRabbit review pass
+# on gr3enarr0w/dscraft#47 -- the previously-pinned commit had gone stale
+# and 404'd; this one was confirmed live and hashed, see
+# :data:`_RECOMMENDED_IMAGE_MODEL_ONNX_SHA256` below.)
+_RECOMMENDED_IMAGE_MODEL_REVISION = "d15189d7028b43f1d3e65039190477f6af591c2a"
 
 _RECOMMENDED_IMAGE_MODEL_ONNX_URL = (
     f"https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/"
     f"{_RECOMMENDED_IMAGE_MODEL_REVISION}/onnx/vision_model_int8.onnx"
 )
 
+# SHA-256 of the exact file at the pinned revision/URL above, computed by
+# actually downloading it (88,648,877 bytes) during the 2026-07 CodeRabbit
+# review pass on gr3enarr0w/dscraft#47. Verified against a fresh download
+# from the same pinned commit before being checked in. Re-verify if
+# `_RECOMMENDED_IMAGE_MODEL_REVISION` is ever repinned.
+_RECOMMENDED_IMAGE_MODEL_ONNX_SHA256 = (
+    "0ab0c1b3ace708e539633af1744d5a95247fe4e14d3e08ff197ef82a6cb9bd93"
+)
+
 MODEL_ALLOWLIST.register(
     name=RECOMMENDED_IMAGE_MODEL_NAME,
-    tier=ModelTier.TIER_1,
-    license_identifier="MIT (inherited; see notes)",
+    tier=ModelTier.TIER_2,
+    license_identifier="MIT (unverified on weights; see notes)",
     notes=(
-        "Recommended production checkpoint for "
+        "Candidate production checkpoint for "
         "dscraft.clean.image_dedup.ImageEmbeddingModel: an int8-quantized "
         "ONNX re-export of openai/clip-vit-base-patch32's vision tower, "
         "hosted at Xenova/clip-vit-base-patch32 (onnx/vision_model_int8.onnx, "
         "~88.6MB -- under this module's <100MB ONNX Runtime footprint "
         "target; the full fp32 vision_model.onnx is ~352MB and is NOT "
-        "recommended). openai/CLIP's own GitHub repository (the code and, "
-        "by long-standing community convention, the released pretrained "
-        "weights) is MIT-licensed. Caveat, documented here per CLAUDE.md's "
-        "'maintaining and re-verifying allowlists is an ongoing task' "
-        "policy: OpenAI's Hugging Face model card for "
-        "clip-vit-base-patch32 does not itself carry an explicit SPDX "
-        "license tag, so this Tier-1 classification rests on the "
-        "widely-held (but not HF-card-explicit) inheritance from the MIT-"
-        "licensed openai/CLIP code repository, not a first-party SPDX "
-        "declaration on the weights themselves -- re-verify before "
-        "shipping this as a hard default in any downstream product, per "
-        "the evaluation doc "
-        "(docs/decisions/2026-07-image-dedup-evaluation.md). Not bundled "
-        "with this package and not downloaded by default -- see "
-        "download_recommended_clip_vision_model()."
+        "recommended). Classified Tier 2 (opt-in-gated), NOT Tier 1: "
+        "OpenAI's own Hugging Face model card for clip-vit-base-patch32 "
+        "does not carry an explicit SPDX license tag, so the MIT "
+        "classification here rests only on the widely-held (but not "
+        "HF-card-explicit, not rights-holder-confirmed) community "
+        "inheritance from the MIT-licensed openai/CLIP *code* repository "
+        "-- that is evidence about the code, not a first-party license "
+        "declaration on the weights/checkpoint themselves. Per CLAUDE.md's "
+        "LazyIsolate policy, an unverified checkpoint must not be "
+        "auto-usable as Tier 1; this entry stays Tier 2 "
+        "(accept_restricted_licenses=True required) until rights-holder "
+        "licensing evidence for the weights specifically is obtained -- "
+        "see the evaluation doc "
+        "(docs/decisions/2026-07-image-dedup-evaluation.md), which records "
+        "this licensing question as pending verification, not settled. "
+        "Not bundled with this package and not downloaded by default -- "
+        "see download_recommended_clip_vision_model()."
     ),
 )
 
@@ -157,18 +185,23 @@ def resize_and_normalize(image: np.ndarray, *, size: int = 8) -> np.ndarray:
     naive-O(n^2) scope boundary).
 
     Args:
-        image: an ``(H, W, 3)`` array (any numeric dtype; ``uint8`` RGB is
-            the typical case). Grayscale ``(H, W)`` input is also accepted
-            and is broadcast to 3 channels.
+        image: an ``(H, W, 3)`` array with non-zero ``H`` and ``W`` (any
+            numeric dtype among ``uint8``, ``uint16``, or floating-point;
+            ``uint8`` RGB is the typical case). Grayscale ``(H, W)`` input
+            is also accepted and is broadcast to 3 channels.
         size: the resized square side length. The returned vector has
             length ``size * size * 3``.
 
     Returns:
-        A flattened ``(size * size * 3,)`` ``float32`` vector.
+        A flattened ``(size * size * 3,)`` ``float32`` vector, with values
+        in ``[0.0, 1.0]``.
 
     Raises:
-        ValueError: if ``image`` is not 2D or 3D, or its (only) trailing
-            dimension is present but not exactly 3 channels.
+        ValueError: if ``image`` is not 2D or 3D, its (only) trailing
+            dimension is present but not exactly 3 channels, either spatial
+            dimension is zero, or ``image``'s dtype/value-range is not one
+            of the supported cases (``uint8``, ``uint16``, or float already
+            in ``[0, 1]`` or ``[0, 255]``).
     """
     arr = np.asarray(image)
     if arr.ndim == 2:
@@ -179,14 +212,58 @@ def resize_and_normalize(image: np.ndarray, *, size: int = 8) -> np.ndarray:
         )
 
     height, width, _ = arr.shape
+    if height == 0 or width == 0:
+        raise ValueError(
+            "Expected an image with non-zero height and width, got shape "
+            f"{arr.shape!r}."
+        )
+
     row_idx = np.minimum((np.arange(size) * height) // size, height - 1)
     col_idx = np.minimum((np.arange(size) * width) // size, width - 1)
     resized = arr[np.ix_(row_idx, col_idx)]
 
-    normalized = resized.astype(np.float32)
-    if normalized.max() > 1.0:
-        normalized = normalized / 255.0
+    normalized = _scale_to_unit_range(resized)
     return normalized.reshape(-1)
+
+
+def _scale_to_unit_range(arr: np.ndarray) -> np.ndarray:
+    """Scale ``arr`` to ``float32`` values in ``[0.0, 1.0]``, per-dtype.
+
+    Unlike a fixed ``/255.0`` divisor (wrong for e.g. ``uint16``, whose
+    full-scale value is 65535, not 255), this dispatches on ``arr.dtype``
+    so every supported input lands in the documented ``[0, 1]`` output
+    range instead of silently producing out-of-range values.
+
+    Raises:
+        ValueError: if ``arr``'s dtype is not one of the supported cases,
+            or a floating-point input's values fall outside ``[0, 255]``
+            (or contain negative values).
+    """
+    if arr.dtype == np.uint8:
+        return arr.astype(np.float32) / 255.0
+    if arr.dtype == np.uint16:
+        return arr.astype(np.float32) / 65535.0
+    if np.issubdtype(arr.dtype, np.floating):
+        as_float = arr.astype(np.float32)
+        min_val = float(as_float.min()) if as_float.size else 0.0
+        max_val = float(as_float.max()) if as_float.size else 0.0
+        if min_val < 0.0:
+            raise ValueError(
+                "Float image input must be non-negative (values in [0, 1] "
+                f"or [0, 255]), got a minimum value of {min_val!r}."
+            )
+        if max_val <= 1.0:
+            return as_float
+        if max_val <= 255.0:
+            return as_float / 255.0
+        raise ValueError(
+            "Float image input must already be scaled to [0, 1] or "
+            f"[0, 255], got a maximum value of {max_val!r}."
+        )
+    raise ValueError(
+        f"Unsupported image dtype {arr.dtype!r}; expected uint8, uint16, "
+        "or a floating-point dtype with values in [0, 1] or [0, 255]."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +350,19 @@ def build_synthetic_image_embedding_onnx(
 # ---------------------------------------------------------------------------
 
 
+def _default_onnx_providers() -> list[str]:
+    """The default ``onnxruntime`` provider list used when a caller omits
+    ``providers`` entirely -- prefers ``CoreMLExecutionProvider`` (Apple's
+    native ONNX Runtime acceleration path) over plain
+    ``CPUExecutionProvider`` when the current ``onnxruntime`` build makes it
+    available, falling back to CPU-only otherwise. Never consulted when a
+    caller passes an explicit ``providers`` list."""
+    available = ort.get_available_providers()
+    if "CoreMLExecutionProvider" in available:
+        return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    return ["CPUExecutionProvider"]
+
+
 @dataclass
 class ImageEmbeddingModel:
     """Wraps an ``onnxruntime.InferenceSession`` plus an image preprocessor.
@@ -307,9 +397,19 @@ class ImageEmbeddingModel:
         No PyTorch, no CLIP-specific Python package -- ``onnxruntime.InferenceSession``
         is the only inference runtime this module ever touches, matching
         ``embeddings.EmbeddingModel.from_onnx_file``.
+
+        If ``providers`` is omitted, the default provider list prefers
+        ``CoreMLExecutionProvider`` over ``CPUExecutionProvider`` when the
+        current ``onnxruntime`` build makes it available -- this machine's
+        primary backend is Apple Silicon (CLAUDE.md's "MPS is the primary
+        backend" principle extends analogously to preferring Apple's native
+        ONNX Runtime acceleration path over plain CPU by default). An
+        explicit ``providers`` list passed by the caller is always used
+        as-is, unchanged.
         """
         session = ort.InferenceSession(
-            str(model_path), providers=list(providers) if providers else ["CPUExecutionProvider"]
+            str(model_path),
+            providers=list(providers) if providers is not None else _default_onnx_providers(),
         )
         resolved_input = input_name or session.get_inputs()[0].name
         resolved_output = output_name or session.get_outputs()[0].name
@@ -369,14 +469,17 @@ def download_recommended_clip_vision_model(
     cache_dir: str | Path | None = None,
     accept_restricted_licenses: bool = False,
 ) -> Path:
-    """Lazily download the Tier-1 recommended CLIP vision-tower checkpoint (optional).
+    """Lazily download the Tier-2 candidate CLIP vision-tower checkpoint (optional).
 
     Image-modality analogue of ``embeddings.download_recommended_model`` --
     same "never called by tests/examples/import-time code," same
     allowlist-check-before-network-access, same atomic-download-then-rename
-    pattern. See :data:`RECOMMENDED_IMAGE_MODEL_NAME`'s allowlist entry
-    (registered above) for the licensing rationale and its documented
-    caveat.
+    pattern -- plus SHA-256 integrity verification (both for freshly
+    downloaded content and for revalidating an existing cached file) since
+    :data:`RECOMMENDED_IMAGE_MODEL_NAME` is Tier 2, not Tier 1. See
+    :data:`RECOMMENDED_IMAGE_MODEL_NAME`'s allowlist entry (registered
+    above) for the licensing rationale and its documented caveat --
+    ``accept_restricted_licenses=True`` is required.
 
     After downloading, wire the result into
     :meth:`ImageEmbeddingModel.from_onnx_file` together with a real CLIP
@@ -385,6 +488,15 @@ def download_recommended_clip_vision_model(
     graph itself, matching :func:`resize_and_normalize`'s documented scope
     boundary as a synthetic-fixture preprocessor, not a real CLIP
     preprocessing pipeline).
+
+    Raises:
+        dscraft.core.licensing.RestrictedLicenseNotAcceptedError: if
+            ``accept_restricted_licenses`` is not ``True``.
+        ModelIntegrityError: if a cached file on disk, or a freshly
+            downloaded file, does not match the pinned expected SHA-256
+            digest. A mismatching cached file is deleted (so a subsequent
+            call re-downloads); a mismatching freshly-downloaded temp file
+            is deleted and never promoted to the cache path.
     """
     MODEL_ALLOWLIST.check(
         RECOMMENDED_IMAGE_MODEL_NAME, accept_restricted_licenses=accept_restricted_licenses
@@ -395,7 +507,10 @@ def download_recommended_clip_vision_model(
     cache_dir_path.mkdir(parents=True, exist_ok=True)
     dest = cache_dir_path / "clip-vit-base-patch32-vision_model_int8.onnx"
     if dest.exists():
-        return dest
+        if _sha256_file(dest) == _RECOMMENDED_IMAGE_MODEL_ONNX_SHA256:
+            return dest
+        # Stale/corrupt/tampered cache entry -- never reuse it silently.
+        dest.unlink()
 
     import urllib.request
 
@@ -404,11 +519,30 @@ def download_recommended_clip_vision_model(
     try:
         os.close(fd)
         urllib.request.urlretrieve(_RECOMMENDED_IMAGE_MODEL_ONNX_URL, tmp_path)  # noqa: S310
+        digest = _sha256_file(tmp_path)
+        if digest != _RECOMMENDED_IMAGE_MODEL_ONNX_SHA256:
+            raise ModelIntegrityError(
+                f"Downloaded {RECOMMENDED_IMAGE_MODEL_NAME!r} checkpoint failed "
+                f"SHA-256 verification: expected "
+                f"{_RECOMMENDED_IMAGE_MODEL_ONNX_SHA256!r}, got {digest!r}. "
+                "Refusing to cache untrusted content."
+            )
         tmp_path.replace(dest)  # atomic on the same filesystem
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
     return dest
+
+
+def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Stream-hash ``path`` with SHA-256, reading in ``chunk_size``-byte
+    chunks (default 1 MiB) so verifying an ~89MB checkpoint never loads the
+    whole file into memory at once."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------------------

@@ -704,9 +704,10 @@ def detect_label_errors(
     """DeCoLe end-to-end: compute per-group thresholds and confident joints, then prune.
 
     Composes :func:`compute_group_class_thresholds` ->
-    :func:`build_group_confident_joints` -> (:func:`prune_by_noise_rate` or
-    :func:`prune_by_class`, selected by ``strategy``) into one call, matching
-    this package's "one clear entrypoint" pattern (see
+    :func:`build_group_confident_joints` -> (:func:`prune_by_noise_rate`,
+    :func:`prune_by_class`, or :func:`prune_by_both`, selected by
+    ``strategy``) into one call, matching this package's "one clear
+    entrypoint" pattern (see
     ``dscraft.clean.detect_near_duplicate_text`` in ``dedup.py``/
     ``embeddings.py`` for the analogous convenience wrapper).
 

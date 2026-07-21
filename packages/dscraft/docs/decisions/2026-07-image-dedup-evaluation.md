@@ -18,7 +18,7 @@ PyTorch-free constraint. If no, it belongs in `vision`, or shouldn't be built ye
 
 ## Research findings
 
-### 1. A Tier-1, ONNX-exportable, <100MB CLIP vision encoder exists
+### 1. A candidate, ONNX-exportable, <100MB CLIP vision encoder exists — licensing is pending verification, not settled Tier 1
 
 `openai/clip-vit-base-patch32`'s own GitHub repository (`github.com/openai/CLIP`) is **MIT-licensed**
 (`LICENSE` file: "MIT License · Copyright (c) 2021 OpenAI"). The Hugging Face community re-export
@@ -41,14 +41,23 @@ precedent (the recommended `all-MiniLM-L6-v2` checkpoint's fp32 export is docume
 "the ONNX file exists, is Tier-1, and is ~90MB" scenario the issue's own acceptance criteria anticipated as a
 "genuinely small first step" trigger.
 
-**License caveat, documented plainly rather than glossed over:** OpenAI's own Hugging Face model card for
-`clip-vit-base-patch32` does not carry an explicit SPDX `license:` tag in its metadata. The Tier-1 classification
-here rests on the widely-held community inheritance from the MIT-licensed `openai/CLIP` code repository (the same
-repository that produced and distributes these pretrained weights), not a first-party SPDX declaration attached
-directly to the weights. This is analogous to — but slightly weaker than — `embeddings.py`'s existing
-`Xenova/all-MiniLM-L6-v2` entry, which cites an explicit `Apache-2.0` tag. Per CLAUDE.md's "maintaining and
-re-verifying allowlists is an ongoing task, not one-time" policy, this caveat is recorded directly in the
-allowlist entry's `notes` field (see `image_dedup.py`), not just in this document, so it travels with the code.
+**License caveat, documented plainly rather than glossed over — and, per 2026-07 CodeRabbit review, decisive
+enough to require Tier 2, not Tier 1:** OpenAI's own Hugging Face model card for `clip-vit-base-patch32` does not
+carry an explicit SPDX `license:` tag in its metadata. The initial pass through this evaluation classified the
+checkpoint Tier 1 on the theory that the widely-held community inheritance from the MIT-licensed `openai/CLIP`
+*code* repository (the same repository that produced and distributes these pretrained weights) was sufficient
+evidence. On review, that reasoning does not hold up against CLAUDE.md's LazyIsolate policy: evidence about the
+*code's* license is not a first-party license declaration on the *weights/checkpoint* themselves, and an
+unverified checkpoint must not be auto-usable as Tier 1 — that is exactly the scenario Tier 2
+(`accept_restricted_licenses=True`) exists for. **Conclusion revised: this checkpoint is registered Tier 2
+(`ModelTier.TIER_2`) in `image_dedup.py`, pending verification, not a settled Tier-1 conclusion.** This is
+analogous to — but weaker than — `embeddings.py`'s existing `Xenova/all-MiniLM-L6-v2` entry, which cites an
+explicit `Apache-2.0` tag and *is* Tier 1. Per CLAUDE.md's "maintaining and re-verifying allowlists is an ongoing
+task, not one-time" policy, this caveat (and the Tier 2 classification) is recorded directly in the allowlist
+entry's `notes` field (see `image_dedup.py`), not just in this document, so it travels with the code.
+`download_recommended_clip_vision_model()` requires `accept_restricted_licenses=True` before it will download or
+reuse a cached copy of this checkpoint, via the same `dscraft.core.licensing.Allowlist.check()` gate every other
+Tier 2 entry in this codebase uses.
 
 ### 2. Face detection (`insightface`) and image-quality scoring (`pyiqa`) — deferred, per the issue's own instructions
 
@@ -85,13 +94,16 @@ lazy, optional production-download path, never bundled, never network-required a
   fixtures (linear projection + L2 normalize over a downsampled-pixel feature vector), used by tests and any future
   example — no network access, no bundled multi-hundred-MB file, mirroring
   `embeddings.build_synthetic_embedding_onnx`/`build_synthetic_embedding_model` exactly.
-- `download_recommended_clip_vision_model()` — documents (and, given network access, performs) the production
-  wiring to `Xenova/clip-vit-base-patch32`'s `vision_model_int8.onnx`, pinned to an immutable commit SHA (not
-  `main`), with an atomic download-then-rename, allowlist-gated exactly like
-  `embeddings.download_recommended_model`. **Never called by tests, the example, or any import-time code.**
+- `download_recommended_clip_vision_model()` — documents (and, given network access and
+  `accept_restricted_licenses=True`, performs) the production wiring to `Xenova/clip-vit-base-patch32`'s
+  `vision_model_int8.onnx`, pinned to an immutable commit SHA (not `main`), with SHA-256 integrity verification
+  (of both freshly-downloaded and previously-cached files) and an atomic download-then-rename, allowlist-gated
+  exactly like `embeddings.download_recommended_model`. **Never called by tests, the example, or any import-time
+  code.**
 - `RECOMMENDED_IMAGE_MODEL_NAME` registered into the **same** `dscraft.clean.embeddings.MODEL_ALLOWLIST` instance
-  (not a second allowlist) as Tier 1, with the license caveat above recorded in its `notes` field — per
-  `dscraft.core.licensing.Allowlist`'s documented per-*module* (not per-file) ownership contract.
+  (not a second allowlist) as **Tier 2** (pending verification — see the licensing caveat above), with the
+  license caveat recorded in its `notes` field — per `dscraft.core.licensing.Allowlist`'s documented
+  per-*module* (not per-file) ownership contract.
 - `detect_near_duplicate_images()` — the one canonical entrypoint, mirroring `detect_near_duplicate_text`.
   **Deliberately reuses `dscraft.clean.dedup.find_near_duplicates` as-is** rather than reimplementing any
   near-duplicate-scanning logic: that function already operates on any `(n, dim)` embedding array regardless of
@@ -121,15 +133,19 @@ enforcing the no-reimplementation decision above).
 - **Face detection (InsightFace) and image-quality scoring (pyiqa)** — explicitly deferred, per the "Research
   findings" section above; not evaluated, not adopted, not implemented.
 - **The `dscraft.vision` alternative** (PyTorch-based CLIP via `open-clip-torch`, reusing `vision`'s existing
-  PyTorch dependency) was considered and rejected for this capability specifically because a viable Tier-1 ONNX path
+  PyTorch dependency) was considered and rejected for this capability specifically because a viable ONNX path
   exists and the issue's own constraint is explicit: "if CLIP can't be cleanly ONNX-exported for this use case,
   this capability belongs in vision, not clean" — the converse holds here: it *can* be cleanly ONNX-exported, so it
-  belongs in `clean`.
+  belongs in `clean`. (This ONNX-exportability finding is independent of the Tier 1/Tier 2 licensing question
+  above — Tier 2 gating governs *whether the checkpoint auto-downloads*, not which subpackage owns the
+  capability.)
 
 ## Bottom line
 
-A Tier-1 (MIT-inherited, with one documented caveat), ONNX-exportable, <100MB-class (88.6MB int8) CLIP vision
-encoder exists and is viable. This evaluation implements the minimal, safe first step directly — the
-`ImageEmbeddingModel`/`resize_and_normalize`/`detect_near_duplicate_images` scaffold in `image_dedup.py`, following
-`embeddings.py`'s exact ONNX Runtime pattern — while explicitly deferring real CLIP preprocessing and the
-face-detection/image-quality companion features to separate future scope.
+A candidate, ONNX-exportable, <100MB-class (88.6MB int8) CLIP vision encoder exists and is architecturally viable
+for `dscraft.clean`. **Its licensing is Tier 2 (pending verification), not a settled Tier 1 conclusion** — see the
+revised licensing caveat above, added during 2026-07 CodeRabbit review. This evaluation implements the minimal,
+safe first step directly — the `ImageEmbeddingModel`/`resize_and_normalize`/`detect_near_duplicate_images`
+scaffold in `image_dedup.py`, following `embeddings.py`'s exact ONNX Runtime pattern, gated behind
+`accept_restricted_licenses=True` and SHA-256 integrity verification — while explicitly deferring real CLIP
+preprocessing and the face-detection/image-quality companion features to separate future scope.

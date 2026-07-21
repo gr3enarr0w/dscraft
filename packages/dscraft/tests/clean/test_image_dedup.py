@@ -8,6 +8,7 @@ test_embeddings.py's/test_dedup.py's structure for the image modality.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -19,13 +20,15 @@ from dscraft.clean import (
     MODEL_ALLOWLIST,
     RECOMMENDED_IMAGE_MODEL_NAME,
     ImageEmbeddingModel,
+    ModelIntegrityError,
     build_synthetic_image_embedding_model,
     build_synthetic_image_embedding_onnx,
     detect_near_duplicate_images,
+    download_recommended_clip_vision_model,
     resize_and_normalize,
 )
 from dscraft.clean.dedup import DedupReport
-from dscraft.core.licensing import ModelTier
+from dscraft.core.licensing import ModelTier, RestrictedLicenseNotAcceptedError
 
 
 def _solid_color_image(color: tuple[int, int, int], size: int = 32) -> np.ndarray:
@@ -52,9 +55,70 @@ def test_no_pytorch_or_transformers_imported():
     )
 
 
-def test_recommended_image_model_is_registered_tier_1():
-    entry = MODEL_ALLOWLIST.check(RECOMMENDED_IMAGE_MODEL_NAME)
-    assert entry.tier is ModelTier.TIER_1
+def test_recommended_image_model_is_registered_tier_2():
+    """The recommended CLIP vision checkpoint's licensing evidence is not
+    solid enough for Tier 1: OpenAI's own Hugging Face model card carries
+    no explicit SPDX license tag, so the MIT classification rests only on
+    inheritance from the openai/CLIP *code* repo's license, not a
+    first-party declaration on the weights themselves. Per CLAUDE.md's
+    LazyIsolate policy this must be Tier 2 (opt-in-gated), not auto-usable
+    Tier 1 -- see docs/decisions/2026-07-image-dedup-evaluation.md."""
+    with pytest.raises(RestrictedLicenseNotAcceptedError):
+        MODEL_ALLOWLIST.check(RECOMMENDED_IMAGE_MODEL_NAME)
+
+    entry = MODEL_ALLOWLIST.check(RECOMMENDED_IMAGE_MODEL_NAME, accept_restricted_licenses=True)
+    assert entry.tier is ModelTier.TIER_2
+
+
+def test_download_recommended_clip_vision_model_requires_explicit_opt_in(tmp_path):
+    """download_recommended_clip_vision_model() must refuse to proceed (and
+    must not touch the network) unless the caller explicitly passes
+    accept_restricted_licenses=True -- same Tier 2 gate as
+    MODEL_ALLOWLIST.check() itself, enforced before any download attempt."""
+    with pytest.raises(RestrictedLicenseNotAcceptedError):
+        download_recommended_clip_vision_model(cache_dir=tmp_path)
+    # No file should have been written to the cache dir.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_recommended_clip_vision_model_rejects_hash_mismatch(tmp_path, monkeypatch):
+    """A freshly 'downloaded' file that fails SHA-256 verification against
+    the pinned expected digest must be rejected: never promoted to the
+    cache path, and the temp file cleaned up."""
+    bad_bytes = b"not the real onnx checkpoint"
+
+    def fake_urlretrieve(url, filename):
+        Path(filename).write_bytes(bad_bytes)
+
+    monkeypatch.setattr("urllib.request.urlretrieve", fake_urlretrieve)
+
+    with pytest.raises(ModelIntegrityError):
+        download_recommended_clip_vision_model(cache_dir=tmp_path, accept_restricted_licenses=True)
+
+    remaining = list(tmp_path.iterdir())
+    assert remaining == [], f"Expected no files left in cache dir, found: {remaining!r}"
+
+
+def test_download_recommended_clip_vision_model_revalidates_stale_cache(tmp_path, monkeypatch):
+    """A previously-cached file that no longer matches the pinned digest
+    (corrupted, tampered, or stale) must be revalidated -- not blindly
+    reused -- and transparently replaced by a fresh, verified download."""
+    dest = tmp_path / "clip-vit-base-patch32-vision_model_int8.onnx"
+    dest.write_bytes(b"stale or corrupted cached content")
+
+    good_bytes = b"pretend this is the real onnx checkpoint bytes"
+    good_digest = hashlib.sha256(good_bytes).hexdigest()
+
+    def fake_urlretrieve(url, filename):
+        Path(filename).write_bytes(good_bytes)
+
+    monkeypatch.setattr(image_dedup_module, "_RECOMMENDED_IMAGE_MODEL_ONNX_SHA256", good_digest)
+    monkeypatch.setattr("urllib.request.urlretrieve", fake_urlretrieve)
+
+    result = download_recommended_clip_vision_model(cache_dir=tmp_path, accept_restricted_licenses=True)
+
+    assert result == dest
+    assert dest.read_bytes() == good_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +146,50 @@ def test_resize_and_normalize_rejects_bad_shapes():
         resize_and_normalize(np.zeros((4, 4, 4), dtype=np.uint8))  # wrong channel count
     with pytest.raises(ValueError):
         resize_and_normalize(np.zeros((4, 4, 4, 3), dtype=np.uint8))  # too many dims
+
+
+def test_resize_and_normalize_scales_uint16_by_full_scale_not_255():
+    """A uint16 image's full-scale value is 65535, not 255 -- dividing by a
+    fixed 255 would produce wildly out-of-[0,1]-range output for any
+    non-trivial uint16 pixel value."""
+    image = np.full((16, 16, 3), 65535, dtype=np.uint16)
+    vector = resize_and_normalize(image, size=4)
+    assert vector.dtype == np.float32
+    np.testing.assert_allclose(vector, 1.0, atol=1e-6)
+
+    half_scale = np.full((16, 16, 3), 32768, dtype=np.uint16)
+    half_vector = resize_and_normalize(half_scale, size=4)
+    np.testing.assert_allclose(half_vector, 32768 / 65535, atol=1e-6)
+
+
+def test_resize_and_normalize_rejects_empty_spatial_dimensions():
+    """A zero-height or zero-width image array must raise a clear
+    ValueError up front, not misbehave (or raise an unclear error) deep
+    inside the resize/index logic."""
+    with pytest.raises(ValueError, match=r"non-zero height and width"):
+        resize_and_normalize(np.zeros((0, 4, 3), dtype=np.uint8))
+    with pytest.raises(ValueError, match=r"non-zero height and width"):
+        resize_and_normalize(np.zeros((4, 0, 3), dtype=np.uint8))
+    with pytest.raises(ValueError, match=r"non-zero height and width"):
+        resize_and_normalize(np.zeros((0, 0, 3), dtype=np.uint8))
+
+
+def test_resize_and_normalize_rejects_unsupported_dtype():
+    with pytest.raises(ValueError, match=r"Unsupported image dtype"):
+        resize_and_normalize(np.zeros((4, 4, 3), dtype=np.int32))
+
+
+def test_resize_and_normalize_rejects_out_of_range_float():
+    with pytest.raises(ValueError):
+        resize_and_normalize(np.full((4, 4, 3), 300.0, dtype=np.float32))
+    with pytest.raises(ValueError):
+        resize_and_normalize(np.full((4, 4, 3), -1.0, dtype=np.float32))
+
+
+def test_resize_and_normalize_accepts_float_already_in_unit_range():
+    image = np.full((16, 16, 3), 0.5, dtype=np.float32)
+    vector = resize_and_normalize(image, size=4)
+    np.testing.assert_allclose(vector, 0.5, atol=1e-6)
 
 
 def test_resize_and_normalize_solid_color_is_uniform():
@@ -175,6 +283,9 @@ def test_detect_near_duplicate_images_reuses_dedup_find_near_duplicates(tmp_path
     embeddings, report = detect_near_duplicate_images(images, model, threshold=0.5)
     expected_report = find_near_duplicates(model.embed(images), threshold=0.5)
 
-    assert report.threshold == expected_report.threshold
-    assert report.num_rows == expected_report.num_rows
-    assert [p.similarity for p in report.pairs] == [p.similarity for p in expected_report.pairs]
+    # Full-object equality, not just a subset of fields -- covers pair
+    # indices (index_a/index_b, not just similarity) and
+    # zero_vector_row_indices too, so a future regression that reimplements
+    # (and subtly diverges from) find_near_duplicates cannot slip through
+    # by only breaking a field this test doesn't check.
+    assert report == expected_report

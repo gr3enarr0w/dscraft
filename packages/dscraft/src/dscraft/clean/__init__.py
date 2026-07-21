@@ -66,6 +66,7 @@ from .embeddings import (
 from .image_dedup import (
     RECOMMENDED_IMAGE_MODEL_NAME,
     ImageEmbeddingModel,
+    ModelIntegrityError,
     build_synthetic_image_embedding_model,
     build_synthetic_image_embedding_onnx,
     detect_near_duplicate_images,
@@ -94,6 +95,7 @@ __all__ = [
     "detect_near_duplicate_text",
     "RECOMMENDED_IMAGE_MODEL_NAME",
     "ImageEmbeddingModel",
+    "ModelIntegrityError",
     "build_synthetic_image_embedding_model",
     "build_synthetic_image_embedding_onnx",
     "download_recommended_clip_vision_model",
