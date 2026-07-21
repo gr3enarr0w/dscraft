@@ -110,6 +110,29 @@ scikit-learn install required at serving time. Base runtime deps
 `skl2onnx`/`onnx`/`onnxruntime` (needed only for `.compile()` itself, and
 lazily imported) install via the separate `automl-onnx` extra.
 
+`dscraft.automl.build_model(name, task, **kwargs)` builds an unfitted,
+sklearn-compatible gradient-boosted-tree estimator from a caller-selected
+backend -- XGBoost, LightGBM, or CatBoost, all three equally supported per
+this project's multi-backend design principle (none is a "default").
+`SUPPORTED_CLASSIFIERS`/`SUPPORTED_REGRESSORS` are the name -> class
+allowlists `build_model` dispatches through, mirroring
+`dscraft.forecast`'s `SUPPORTED_MODELS` pattern. All three libraries are
+base runtime deps of the `automl` extra (not a separate extra).
+
+`dscraft.automl.build_clusterer(name, **kwargs)` builds an unfitted,
+sklearn-compatible clustering estimator -- currently HDBSCAN, via
+scikit-learn's own built-in `sklearn.cluster.HDBSCAN` (no new dependency
+needed), exposed through `SUPPORTED_CLUSTERERS`. This is an independent,
+unsupervised capability -- it does not require the supervised model
+allowlist above.
+
+`dscraft.automl.build_resampler(name, **kwargs)` builds an unfitted
+`imbalanced-learn` resampler -- `RandomOverSampler`, `SMOTE`, or
+`RandomUnderSampler`, exposed through `SUPPORTED_RESAMPLERS` -- for
+rebalancing a skewed classification training set ahead of the classifier
+path above. `imbalanced-learn` is a base runtime dep of the `automl`
+extra.
+
 ## `dscraft.clean`
 
 A data-quality firewall for a training DataFrame. The primary entrypoint is
@@ -283,6 +306,28 @@ result objects. Outlier/anomaly detection and time-series-specific EDA
 (despite `dscraft.forecast` being an obvious future consumer) are out of
 scope for this pass — see `DSCraft_Unified_Architecture.md`'s LazyEDA
 module entry for what's deferred. Install via the `eda` extra.
+
+For publication-quality, static, layered exploratory plots (as an
+alternative to — not a replacement for — the interactive single-file HTML
+report above), `dscraft.eda.plots` exposes `association_heatmap` and
+`column_distribution`, which turn an `AssociationMatrixResult` or a
+`ColumnSummary` you already have (e.g. from `profile.association_matrix`
+or `profile.report_data.column_summaries`) into a `plotnine.ggplot`
+object you can further customize and `.save(path)` yourself:
+
+```python
+from dscraft.eda import LazyEDA, association_heatmap, column_distribution
+
+profile = LazyEDA().profile("orders.parquet")
+association_heatmap(profile.association_matrix).save("associations.png")
+
+summaries = {s.name: s for s in profile.report_data.column_summaries}
+column_distribution(summaries["amount"]).save("amount_distribution.png")
+```
+
+This is an optional, separately-gated capability: install the `eda-plotnine`
+extra (`pip install "dscraft[eda,eda-plotnine]"`) to use it — the base `eda`
+extra alone does not pull in `plotnine`/matplotlib.
 
 ## Further reading
 
