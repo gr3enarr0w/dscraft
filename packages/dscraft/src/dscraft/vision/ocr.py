@@ -56,11 +56,11 @@ import numpy as np
 from PIL import Image
 
 __all__ = [
-    "OCRResult",
     "OCRDetection",
+    "OCRResult",
     "SUPPORTED_OCR_BACKENDS",
-    "run_ocr",
     "TesseractNotInstalledError",
+    "run_ocr",
 ]
 
 #: Backend names this module supports, mapped to a short human-readable

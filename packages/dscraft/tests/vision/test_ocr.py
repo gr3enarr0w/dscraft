@@ -53,7 +53,12 @@ def _make_text_image(text: str = TEXT, size: tuple[int, int] = (240, 80)) -> Ima
                 "/System/Library/Fonts/Supplemental/Arial.ttf", 48
             )
         except OSError:
-            font = ImageFont.load_default()
+            # Pillow's built-in bitmap font is fixed-size (~11px) on Pillow
+            # <10.1; passing `size=` requires Pillow>=10.1 (see the `vision`
+            # extra's floor in pyproject.toml) to get a legible, scaled
+            # fallback glyph rather than a tiny bitmap font that neither
+            # backend can reliably recognize.
+            font = ImageFont.load_default(size=48)
     draw.text((10, 10), text, fill="black", font=font)
     return image
 
@@ -69,21 +74,36 @@ def test_run_ocr_rejects_unknown_backend() -> None:
         run_ocr(image, backend="not-a-real-backend")
 
 
-def test_run_ocr_accepts_pil_numpy_and_path(tmp_path) -> None:
+def test_run_ocr_accepts_pil_numpy_and_path(tmp_path, monkeypatch) -> None:
     """`run_ocr`'s image argument accepts the same shapes
     `SimpleImagePipeline`'s convention implies: a decoded PIL Image, a
-    numpy array, or a file path -- not a single hard-coded input type."""
+    numpy array, or a file path -- not a single hard-coded input type.
+
+    This is purely an input-shape acceptance test for `_to_pil_image`, not
+    a recognition-quality test (that's `test_easyocr_backend_extracts_
+    recognizable_text` below) -- so `easyocr.Reader` is mocked here to
+    avoid 4 redundant real model-load/inference calls per test run.
+    """
+    import easyocr
+
+    class _FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def readtext(self, array, detail=1):
+            return [([[0, 0], [10, 0], [10, 10], [0, 10]], TEXT, 0.99)]
+
+    monkeypatch.setattr(easyocr, "Reader", _FakeReader)
+
     image = _make_text_image()
     array = np.asarray(image)
     file_path = tmp_path / "text.png"
     image.save(file_path)
 
-    # All three should decode without raising (backend-specific recognition
-    # correctness is asserted separately below); this test is purely about
-    # input-shape acceptance via the internal `_to_pil_image` normalizer.
     for candidate in (image, array, file_path, str(file_path)):
         result = run_ocr(candidate, backend="easyocr")
         assert isinstance(result, OCRResult)
+        assert result.text == TEXT
 
 
 def test_easyocr_backend_extracts_recognizable_text() -> None:
